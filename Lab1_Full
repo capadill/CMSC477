@@ -38,6 +38,44 @@ def find_pose_from_tag(K, detection):
 
     return p.reshape((3,)), r.reshape((3,))
 
+def runCamera():
+    scalar_x = scalar_y = scalar_z = 0
+    #print("Running runCamera")
+    try:
+        img = ep_camera.read_cv2_image(strategy="newest", timeout=0.5)  
+        cv2.imwrite("/home/user/Desktop/test.png", img) 
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray.astype(np.uint8)
+
+        K=np.array([[184.752, 0, 320], [0, 184.752, 180], [0, 0, 1]])
+
+        results = at_detector.detect(gray, estimate_tag_pose=False)
+        for res in results:
+            #print("TAG ID: ", res.tag_id)
+            pose = find_pose_from_tag(K, res)
+            rot, jaco = cv2.Rodrigues(pose[1], pose[1])
+            
+            if res.tag_id==0:
+                #scalar_x = 2*(pose[0][2]-.25) #equals distance from ideal spot from marker (.25 m away)
+                #scalar_y = 2.5*pose[0][0] #controls displacement left-to-right from marker
+                #scalar_z = 3*((pose[1][2]))*180 / np.pi
+                scalar_x = (pose[0][2]-.25)/5 #equals distance from ideal spot from marker (.25 m away)
+                scalar_y = pose[0][0]/4 #controls displacement left-to-right from marker
+                scalar_z = -2*(((pose[1][2]))*180 / np.pi + 3)
+
+            pts = res.corners.reshape((-1, 1, 2)).astype(np.int32)
+            img = cv2.polylines(img, [pts], isClosed=True, color=(0, 0, 255), thickness=5)
+            cv2.circle(img, tuple(res.center.astype(np.int32)), 5, (0, 0, 255), -1)
+
+        cv2.imshow("img", img)
+        cv2.waitKey(10)
+    except KeyboardInterrupt:
+        ep_camera.stop_video_stream()
+        ep_robot.close()
+        print ('Exiting')
+        exit(1)
+    return scalar_x,scalar_y,scalar_z
+
 def movePath(path):
     print("Beginning Navigation")
     queue = path
@@ -49,6 +87,7 @@ def movePath(path):
         goal_node = int(queue.pop(0))#pop takes element out off the array
         #nodes must be neighbors
         direction = current_node - goal_node
+        scalar_x,scalar_y,scalar_z = runCamera()
         #print(direction)
         #if positive, moving down/right (50-40)
         #if negative, moving up/left (50-60)
@@ -83,58 +122,84 @@ def movePath(path):
             elif direction == 9: #moving down & right
                 print("Moving Down & Right...")
                 ep_chassis.move(x=.266, y=.266, z=0, xy_speed=0.6).wait_for_completed()
+
+        #For next time, adjust to make front of robot face "Right"
+        if direction < 0:
+            if direction == -1: #moving right
+                print("Moving Right...")
+                ep_chassis.move(x=.425, y=-0, z=0, xy_speed=0.6).wait_for_completed()
+            elif direction == -10: #moving up
+                print("Moving Up...")
+                ep_chassis.move(x=0, y=-.45, z=0, xy_speed=0.6).wait_for_completed()
+            elif direction == -11: #moving up & right
+                print("Moving Up & Right...")
+                ep_chassis.move(x=.266, y=-.266, z=0, xy_speed=0.6).wait_for_completed()
+            elif direction == -9: #moving up & left
+                print("Moving Up & Left...")
+                ep_chassis.move(x=-.266, y=.266, z=0, xy_speed=0.6).wait_for_completed()
+        if direction > 0:
+            if direction == 1: #moving left
+                print("Moving Left...")
+                ep_chassis.move(x=-.425, y=0, z=0, xy_speed=0.6).wait_for_completed()
+            elif direction == 10: #moving down
+                print("Moving Down...")
+                ep_chassis.move(x=0, y=.45, z=0, xy_speed=0.6).wait_for_completed()
+            elif direction == 11: #moving down & left
+                print("Moving Down & Left...")
+                ep_chassis.move(x=.266, y=.266, z=0, xy_speed=0.6).wait_for_completed()
+            elif direction == 9: #moving down & right
+                print("Moving Down & Right...")
+                ep_chassis.move(x=.266, y=.266, z=0, xy_speed=0.6).wait_for_completed()
         current_node = goal_node
-        stop=0
+        stop=1
 
         if goal_node == 32:
-            print("Running AprilCenter")
-            #print("apritag 5")
-            while stop==0:
-                try:
-                    img = ep_camera.read_cv2_image(strategy="newest", timeout=0.5)  
-                    cv2.imwrite("/home/user/Desktop/test.png", img) 
-                    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                    gray.astype(np.uint8)
+            print("At Node 32")
+            stop = 0
 
-                    K=np.array([[184.752, 0, 320], [0, 184.752, 180], [0, 0, 1]])
+        while stop==0:
+            #print("Running Centering")
+            scalar_x,scalar_y,scalar_z = runCamera()
+            if scalar_x < .01 and scalar_x > -.01 and scalar_y < .01 and scalar_y > -.01:
+                print("Successfully Centered - Exiting")
+                stop=1
 
-                    results = at_detector.detect(gray, estimate_tag_pose=False)
-                    for res in results:
-                        if res.tag_id==0:
-                            #print(res.tag_id)
-                            pose = find_pose_from_tag(K, res)
-                            rot, jaco = cv2.Rodrigues(pose[1], pose[1])
-                            #print(pose)
-        
-                            scalar_x = 2*(pose[0][2]-.25) #equals distance from ideal spot from marker (.25 m away)
-                            scalar_y = 2.5*pose[0][0] #controls displacement left-to-right from marker
-                            scalar_z = 3*((pose[1][2]))*180 / np.pi
-                            #print(scalar_z)
-                            
-                            if scalar_x < 0 :
-                                ep_chassis.drive_speed(x=-(-.35 + scalar_x*3)**2, y=scalar_y, z=3.5*scalar_z, timeout=5)
-                            else :
-                                ep_chassis.drive_speed(x=2*scalar_x**2, y=scalar_y, z=1.5*scalar_z, timeout=5)
+            if scalar_x < .02 and scalar_x > 0:
+                scalar_x = .02
+            if scalar_x > -.02 and scalar_x < 0:
+                scalar_x = -.02
+            if scalar_y < .02 and scalar_y > 0:
+                scalar_y = .02
+            if scalar_y > -.02 and scalar_y < 0:
+                scalar_y = -.02
+            if scalar_z < 1 and scalar_z > -1:
+                scalar_z = 0
 
-                            if scalar_x < .3 and scalar_x > .15 and scalar_y < .05 and scalar_y > -.05:
-                                print("Here!!!")
-                                stop=1
-                                #ep_camera.stop_video_stream()
-                                #ep_robot.close()
-                                print ('Exiting')
-                                #exit(1)
-                            pts = res.corners.reshape((-1, 1, 2)).astype(np.int32)
-                            img = cv2.polylines(img, [pts], isClosed=True, color=(0, 0, 255), thickness=5)
-                            cv2.circle(img, tuple(res.center.astype(np.int32)), 5, (0, 0, 255), -1)
-        
-                    cv2.imshow("img", img)
-                    cv2.waitKey(10)
-                except KeyboardInterrupt:
-                    ep_camera.stop_video_stream()
-                    ep_robot.close()
-                    print ('Exiting')
-                    exit(1)       
-        
+            print(scalar_x, scalar_y, scalar_z)
+            ep_chassis.move(x=scalar_x, y=scalar_y, z=scalar_z, xy_speed=0.6).wait_for_completed()
+            """
+            if scalar_x < 0:
+                if scalar_y < 0:
+                    ep_chassis.move(x=scalar_x/10-.1, y=scalar_y/10+.1, z=-scalar_z/10, xy_speed=0.6).wait_for_completed()
+                elif scalar_y > 0:
+                    ep_chassis.move(x=scalar_x/10-.1, y=scalar_y/10-.1, z=-scalar_z/10, xy_speed=0.6).wait_for_completed()
+            elif scalar_x < 0:
+                if scalar_y < 0:
+                    ep_chassis.move(x=scalar_x/10+.1, y=scalar_y/10+.1, z=-scalar_z/10, xy_speed=0.6).wait_for_completed()
+                elif scalar_y > 0:
+                    ep_chassis.move(x=scalar_x/10+.1, y=scalar_y/10-.1, z=-scalar_z/10, xy_speed=0.6).wait_for_completed()
+            """
+            """
+            if scalar_x < 0 :
+                ep_chassis.drive_speed(x=-(-.35 + scalar_x*3)**2, y=scalar_y, z=3.5*scalar_z, timeout=5)
+                time.sleep(.1)
+            else :
+                ep_chassis.drive_speed(x=2*scalar_x**2, y=scalar_y, z=1.5*scalar_z, timeout=5)
+                time.sleep(.1)
+            """
+
+
+
     return
 
 def bfs(graph, start, goal): #FIFO means if you've been waiting the longest, you get priority
@@ -280,5 +345,9 @@ if __name__ == "__main__":
     if path_to_goal:
         print("Path to goal:", path_to_goal)
         movePath(path_to_goal)
+        ep_camera.stop_video_stream()
+        ep_robot.close()
+        print ('Exiting')
+        exit(1)
     else:
         print("Goal not found.")
